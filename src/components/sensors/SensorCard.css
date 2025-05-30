@@ -1,0 +1,220 @@
+.sensor-card {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  border: 1px solid #e5e7eb;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.sensor-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: #e5e7eb;
+  transition: background 0.3s ease;
+}
+
+.sensor-card.online::before {
+  background: #10b981;
+}
+
+.sensor-card.offline::before {
+  background: #ef4444;
+}
+
+.sensor-card.warning::before {
+  background: #f59e0b;
+}
+
+.sensor-card.error::before {
+  background: #ef4444;
+}
+
+.sensor-card.maintenance::before {
+  background: #6b7280;
+}
+
+.sensor-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+  border-color: #3b82f6;
+}
+
+.sensor-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 15px;
+}
+
+.sensor-info {
+  flex: 1;
+}
+
+.sensor-name {
+  color: #1f2937;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 5px 0;
+  line-height: 1.3;
+}
+
+.sensor-location {
+  color: #6b7280;
+  font-size: 0.85rem;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.sensor-status {
+  margin-left: 10px;
+}
+
+.status-badge {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.status-badge.status-online {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.status-badge.status-offline {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-badge.status-warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-badge.status-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-badge.status-maintenance {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.sensor-readings {
+  margin-bottom: 15px;
+}
+
+.reading-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.reading-item:last-child {
+  border-bottom: none;
+}
+
+.reading-icon {
+  font-size: 1.2rem;
+  margin-right: 10px;
+  min-width: 24px;
+}
+
+.reading-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.reading-label {
+  color: #6b7280;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.reading-value {
+  color: #1f2937;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.no-readings {
+  text-align: center;
+  padding: 20px;
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+.sensor-card-footer {
+  border-top: 1px solid #f3f4f6;
+  padding-top: 12px;
+}
+
+.sensor-metrics {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.metric-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.metric-icon {
+  font-size: 0.9rem;
+}
+
+.metric-text {
+  font-weight: 500;
+}
+
+.battery-good {
+  color: #10b981;
+}
+
+.battery-warning {
+  color: #f59e0b;
+}
+
+.battery-critical {
+  color: #ef4444;
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+  .sensor-card {
+    padding: 16px;
+  }
+  
+  .sensor-name {
+    font-size: 1rem;
+  }
+  
+  .sensor-metrics {
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+  }
+  
+  .metric-item {
+    font-size: 0.75rem;
+  }
+}
