@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Sensor, SensorReading } from '../../types';
 import { formatTemperature, formatHumidity, formatDateTime, formatRelativeTime } from '../../utils/formatters';
 import Chart from '../dashboard/Chart';
@@ -16,7 +16,8 @@ const SensorDetails: React.FC<SensorDetailsProps> = ({ sensor, onBack }) => {
   const [timeRange, setTimeRange] = useState<'1h' | '6h' | '24h' | '7d'>('24h');
   const [activeTab, setActiveTab] = useState<'overview' | 'readings' | 'settings'>('overview');
 
-  const loadReadings = async () => {
+  // ✅ FIXED: loadReadings in useCallback
+  const loadReadings = useCallback(async () => {
     setLoading(true);
     
     try {
@@ -65,11 +66,12 @@ const SensorDetails: React.FC<SensorDetailsProps> = ({ sensor, onBack }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [sensor.id, sensor.lastReading?.temperature, sensor.lastReading?.humidity, sensor.lastReading?.pressure, timeRange]);
 
-    useEffect(() => {
+  // ✅ FIXED: useEffect with correct dependency
+  useEffect(() => {
     loadReadings();
-    }, [sensor.id, timeRange, loadReadings]);
+  }, [loadReadings]);
 
   const getStatusColor = (status: string) => {
     const colors = {
