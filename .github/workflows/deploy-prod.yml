@@ -1,36 +1,294 @@
-name: Deploy Web Production
+name: Deploy Web to Production
 
 on:
   push:
-    branches: [ release-hv ]
+    branches: [release-hv]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
+  
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Override version from VERSION file'
+        required: false
+        default: ''
+      confirm_production:
+        description: 'Type "DEPLOY-TO-PRODUCTION" to confirm'
+        required: true
+        default: ''
+
+env:
+  DOCKER_REGISTRY: docker.io
+  DOCKER_IMAGE: gianlucacelante/ice-pulse-web
+  INFRA_REPO_URL: git@github.com:GianlucaCelante/ice-pulse-infra.git
+  INFRA_BRANCH: master
+  DEPLOY_PATH_PROD: devops/prod/docker-compose-web-prod.yml
 
 jobs:
-  deploy:
+  security_check:
+    name: Security & Quality Gates (Web)
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
+    - name: Checkout Code
       uses: actions/checkout@v4
       
+    - name: Manual Deploy Confirmation
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        if [ "${{ github.event.inputs.confirm_production }}" != "DEPLOY-TO-PRODUCTION" ]; then
+          echo "❌ Production deployment not confirmed"
+          echo "Please type 'DEPLOY-TO-PRODUCTION' to proceed"
+          exit 1
+        fi
+        echo "✅ Production deployment confirmed"
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install Dependencies
+      run: |
+        echo "=== Installing dependencies ==="
+        npm ci
+        
+    - name: Security Audit
+      run: |
+        echo "=== Security Audit ==="
+        npm audit --audit-level=moderate || echo "Security warnings found"
+        
+    - name: Run Full Test Suite
+      run: |
+        echo "=== Running Production Test Suite ==="
+        npm run type-check
+        npm run lint
+        npm test -- --coverage --watchAll=false
+        npm run build
+        echo "✅ All tests passed for production"
+
+  build:
+    name: Build and Push Production Image (Web)
+    runs-on: ubuntu-latest
+    needs: security_check
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Get Version
+      id: get_version
+      run: |
+        if [ -n "${{ github.event.inputs.version_override }}" ]; then
+          VERSION="${{ github.event.inputs.version_override }}"
+        else
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION | tr -d '\n\r' | xargs)
+            VERSION="${VERSION}.PROD"
+          else
+            VERSION="0.0.$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}.PROD"
+          fi
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building production web version: $VERSION"
+        
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       
-    - name: Login to Docker Hub
+    - name: Log in to Docker Hub
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
         
-    - name: Build and push
+    - name: Build and Push Production Docker Image
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
-        tags: ${{ secrets.DOCKER_USERNAME }}/ice-pulse-web:prod-latest.PROD
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        tags: |
+          ${{ env.DOCKER_IMAGE }}:${{ steps.get_version.outputs.version }}
+          ${{ env.DOCKER_IMAGE }}:prod-latest.PROD
+        build-args: |
+          VERSION=${{ steps.get_version.outputs.version }}
+
+  deploy:
+    name: Update Infrastructure Repository (Production Web)
+    runs-on: ubuntu-latest
+    needs: build
+    environment: prod
+    
+    steps:
+    - name: Setup SSH Key
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
         
-    - name: Deploy notification
+    - name: Clone Infrastructure Repository
       run: |
-        echo "✅ Web Production deployed successfully"
-        echo "🔄 Watchtower will auto-update on VPS"
+        echo "=== Cloning infra repository ==="
+        git clone ${{ env.INFRA_REPO_URL }} infra-repo
+        cd infra-repo
+        git checkout ${{ env.INFRA_BRANCH }}
+        
+        echo "=== Git configuration ==="
+        git config user.name "GitHub Actions Bot"
+        git config user.email "actions@github.com"
+        
+    - name: Install yq
+      run: |
+        echo "=== Installing yq ==="
+        sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+        sudo chmod +x /usr/bin/yq
+        yq --version
+        
+    - name: Update Docker Compose Configuration (Production)
+      run: |
+        cd infra-repo
+        
+        echo "=== Updating production docker-compose ==="
+        if [ -f "${{ env.DEPLOY_PATH_PROD }}" ]; then
+          # Update all web instances
+          yq e -i '.services.ice-pulse-web-prod-1.image = "${{ env.DOCKER_IMAGE }}:prod-latest.PROD"' ${{ env.DEPLOY_PATH_PROD }}
+          yq e -i '.services.ice-pulse-web-prod-2.image = "${{ env.DOCKER_IMAGE }}:prod-latest.PROD"' ${{ env.DEPLOY_PATH_PROD }}
+        else
+          echo "⚠️ Production compose file not found, creating basic version"
+          mkdir -p $(dirname ${{ env.DEPLOY_PATH_PROD }})
+          cat > ${{ env.DEPLOY_PATH_PROD }} << 'EOF'
+        version: '3.8'
+        services:
+          ice-pulse-web-prod-1:
+            image: ${{ env.DOCKER_IMAGE }}:prod-latest.PROD
+            container_name: ice-pulse-web-prod-1
+            environment:
+              - NODE_ENV=production
+              - REACT_APP_API_URL=https://api.yourdomain.com
+            restart: always
+            labels:
+              - "com.centurylinklabs.watchtower.enable=true"
+          ice-pulse-web-prod-2:
+            image: ${{ env.DOCKER_IMAGE }}:prod-latest.PROD
+            container_name: ice-pulse-web-prod-2
+            environment:
+              - NODE_ENV=production
+              - REACT_APP_API_URL=https://api.yourdomain.com
+            restart: always
+            labels:
+              - "com.centurylinklabs.watchtower.enable=true"
+          nginx-web-lb:
+            image: nginx:alpine
+            container_name: nginx-web-lb
+            ports:
+              - "8092:80"
+              - "8093:443"
+            volumes:
+              - ./nginx-web-prod.conf:/etc/nginx/nginx.conf:ro
+            depends_on:
+              - ice-pulse-web-prod-1
+              - ice-pulse-web-prod-2
+            restart: always
+          watchtower-web-prod:
+            image: containrrr/watchtower
+            container_name: watchtower-web-prod
+            restart: always
+            volumes:
+              - /var/run/docker.sock:/var/run/docker.sock
+            command: --interval 600 --cleanup ice-pulse-web-prod-1 ice-pulse-web-prod-2
+        EOF
+        fi
+        
+        echo "=== Updated production docker-compose file ==="
+        cat ${{ env.DEPLOY_PATH_PROD }}
+        
+    - name: Create Git Tag for Production
+      run: |
+        cd infra-repo
+        git tag "web-prod-v${{ needs.build.outputs.version }}" || echo "Tag already exists"
+        
+    - name: Commit and Push Changes
+      run: |
+        cd infra-repo
+        
+        if git diff --quiet; then
+          echo "No changes to commit"
+          exit 0
+        fi
+        
+        echo "=== Committing production changes ==="
+        git add ${{ env.DEPLOY_PATH_PROD }}
+        git commit -m "🌐 Deploy WEB PRODUCTION: ${{ needs.build.outputs.version }}
+
+        - Image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}
+        - Commit: ${{ github.sha }}
+        - Actor: ${{ github.actor }}
+        - Workflow: ${{ github.workflow }}
+        - Branch: ${{ github.ref_name }}
+        - Environment: prod
+        - High Availability: 2 web replicas + Load Balancer"
+        
+        echo "=== Pushing to remote with tags ==="
+        git push origin ${{ env.INFRA_BRANCH }} --tags
+        
+    - name: Deploy to Production VPS (Web)
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.PROD_VPS_HOST }}
+        username: ${{ secrets.PROD_VPS_USER }}
+        key: ${{ secrets.PROD_VPS_SSH_KEY }}
+        script: |
+          cd /home/deploy/ice-pulse-infra
+          git pull origin master
+          cd devops/prod
+          
+          echo "🌐 Deploying web to production with zero-downtime..."
+          
+          # Rolling update strategy for web
+          docker-compose -f docker-compose-web-prod.yml pull
+          docker-compose -f docker-compose-web-prod.yml up -d --remove-orphans
+          
+          # Wait for health checks
+          sleep 30
+          
+          # Verify deployment
+          curl -f http://localhost:8092/health || exit 1
+          
+          echo "✅ Web production deployment successful"
+          
+    - name: Deployment Summary
+      run: |
+        echo "## 🌐 WEB PRODUCTION Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: PRODUCTION" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **High Availability**: 2 web replicas" >> $GITHUB_STEP_SUMMARY
+        echo "- **Load Balancer**: Nginx" >> $GITHUB_STEP_SUMMARY
+        echo "- **Auto-Deploy**: Watchtower (10min intervals)" >> $GITHUB_STEP_SUMMARY
+        echo "- **URL**: https://yourdomain.com:8092" >> $GITHUB_STEP_SUMMARY
+        echo "- **Git Tag**: \`web-prod-v${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Notify Production Deployment (Web)
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: always()
+    
+    steps:
+    - name: Notify Success
+      if: needs.deploy.result == 'success'
+      run: |
+        echo "🎉 WEB PRODUCTION DEPLOYMENT SUCCESSFUL!"
+        echo "Version: ${{ needs.build.outputs.version }}"
+        echo "High Availability: 2 web replicas active"
+        echo "Load Balancer: Active"
+        echo "URL: https://yourdomain.com:8092"
+        
+    - name: Notify Failure
+      if: needs.deploy.result == 'failure'
+      run: |
+        echo "🚨 WEB PRODUCTION DEPLOYMENT FAILED!"
+        echo "Immediate investigation required"

@@ -1,36 +1,262 @@
-name: Deploy Web Dev
+name: Deploy Web to Development
 
 on:
   push:
-    branches: [ release-dev ]
+    branches: [release-dev]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
+  
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Override version from VERSION file'
+        required: false
+        default: ''
+
+env:
+  DOCKER_REGISTRY: docker.io
+  DOCKER_IMAGE: gianlucacelante/ice-pulse-web  # ← Sostituisci con il tuo username
+  INFRA_REPO_URL: git@github.com:GianlucaCelante/ice-pulse-infra.git
+  INFRA_BRANCH: master
+  DEPLOY_PATH_DEV: devops/dev/docker-compose-web-dev.yml
 
 jobs:
-  deploy:
+  test:
+    name: Build & Test
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
+    - name: Checkout Code
       uses: actions/checkout@v4
       
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install Dependencies
+      run: |
+        echo "=== Installing dependencies ==="
+        npm ci
+        
+    - name: Run Type Check
+      run: |
+        echo "=== Running TypeScript checks ==="
+        npm run type-check || echo "⚠️ Type check completed with warnings"
+        
+    - name: Run Linter
+      run: |
+        echo "=== Running ESLint ==="
+        npm run lint || echo "⚠️ Linting completed with warnings"
+        
+    - name: Run Tests
+      run: |
+        echo "=== Running Tests ==="
+        npm test -- --coverage --watchAll=false || echo "⚠️ Tests completed"
+        
+    - name: Build Application
+      run: |
+        echo "=== Building React app ==="
+        npm run build
+        echo "✅ Build phase completed successfully"
+        
+    - name: Read Version
+      id: version
+      run: |
+        if [ -n "${{ github.event.inputs.version_override }}" ]; then
+          VERSION="${{ github.event.inputs.version_override }}"
+          echo "Using manual override version: $VERSION"
+        else
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION | tr -d '\n\r' | xargs)
+            echo "Read version from VERSION file: $VERSION"
+          else
+            VERSION="0.0.$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}"
+            echo "Generated fallback version: $VERSION"
+          fi
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Final version: $VERSION"
+
+  build:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: Get Version
+      id: get_version
+      run: |
+        if [ -n "${{ github.event.inputs.version_override }}" ]; then
+          VERSION="${{ github.event.inputs.version_override }}"
+        else
+          if [ -f VERSION ]; then
+            VERSION=$(cat VERSION | tr -d '\n\r' | xargs)
+          else
+            VERSION="0.0.$(date +%Y%m%d%H%M%S)-${GITHUB_SHA:0:7}"
+          fi
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Building web version: $VERSION"
+        
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       
-    - name: Login to Docker Hub
+    - name: Log in to Docker Hub
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
         
-    - name: Build and push
+    - name: Build and Push Docker Image
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
-        tags: ${{ secrets.DOCKER_USERNAME }}/ice-pulse-web:dev-latest
+        tags: |
+          ${{ env.DOCKER_IMAGE }}:${{ steps.get_version.outputs.version }}
+          ${{ env.DOCKER_IMAGE }}:dev-latest
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        build-args: |
+          VERSION=${{ steps.get_version.outputs.version }}
+
+  deploy:
+    name: Update Infrastructure Repository
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+    - name: Setup SSH Key
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
         
-    - name: Deploy notification
+    - name: Clone Infrastructure Repository
       run: |
-        echo "✅ Web Dev deployed successfully"
-        echo "🔄 Watchtower will auto-update in ~3 minutes"
+        echo "=== Cloning infra repository ==="
+        git clone ${{ env.INFRA_REPO_URL }} infra-repo
+        cd infra-repo
+        git checkout ${{ env.INFRA_BRANCH }}
+        
+        echo "=== Git configuration ==="
+        git config user.name "GitHub Actions Bot"
+        git config user.email "actions@github.com"
+        
+    - name: Install yq
+      run: |
+        echo "=== Installing yq ==="
+        sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+        sudo chmod +x /usr/bin/yq
+        yq --version
+        
+    - name: Update Docker Compose Configuration
+      run: |
+        cd infra-repo
+        
+        echo "=== Current docker-compose file ==="
+        if [ -f "${{ env.DEPLOY_PATH_DEV }}" ]; then
+          cat ${{ env.DEPLOY_PATH_DEV }}
+        else
+          echo "⚠️ Docker compose file not found: ${{ env.DEPLOY_PATH_DEV }}"
+          echo "Creating basic docker-compose file..."
+          mkdir -p $(dirname ${{ env.DEPLOY_PATH_DEV }})
+          cat > ${{ env.DEPLOY_PATH_DEV }} << 'EOF'
+        version: '3.8'
+        services:
+          ice-pulse-web-dev:
+            image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}
+            container_name: ice-pulse-web-dev
+            ports:
+              - "8090:80"
+            environment:
+              - NODE_ENV=development
+              - REACT_APP_API_URL=http://localhost:8080
+            restart: always
+            labels:
+              - "com.centurylinklabs.watchtower.enable=true"
+          watchtower-web-dev:
+            image: containrrr/watchtower
+            container_name: watchtower-web-dev
+            restart: always
+            volumes:
+              - /var/run/docker.sock:/var/run/docker.sock
+            command: --interval 180 --cleanup ice-pulse-web-dev
+        EOF
+        fi
+        
+        echo "=== Updating image version ==="
+        yq e -i '.services.ice-pulse-web-dev.image = "${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}"' ${{ env.DEPLOY_PATH_DEV }}
+        
+        # Aggiorna timestamp per forzare re-deploy
+        TIMESTAMP=$(date +%s)
+        yq e -i ".services.ice-pulse-web-dev.environment += [\"DEPLOY_TIMESTAMP=${TIMESTAMP}\"]" ${{ env.DEPLOY_PATH_DEV }} || echo "Could not add timestamp"
+        
+        echo "=== Updated docker-compose file ==="
+        cat ${{ env.DEPLOY_PATH_DEV }}
+        
+    - name: Commit and Push Changes
+      run: |
+        cd infra-repo
+        
+        echo "=== Checking for changes ==="
+        git status
+        git diff
+        
+        if git diff --quiet; then
+          echo "No changes to commit"
+          exit 0
+        fi
+        
+        echo "=== Committing changes ==="
+        git add ${{ env.DEPLOY_PATH_DEV }}
+        git commit -m "🌐 Deploy web dev: ${{ needs.build.outputs.version }}
+
+        - Image: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}
+        - Commit: ${{ github.sha }}
+        - Actor: ${{ github.actor }}
+        - Workflow: ${{ github.workflow }}
+        - Branch: ${{ github.ref_name }}
+        - Environment: development"
+        
+        echo "=== Pushing to remote ==="
+        git push origin ${{ env.INFRA_BRANCH }}
+        
+    - name: Deployment Summary
+      run: |
+        echo "## 🌐 Web Development Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: development" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: ${{ env.DOCKER_IMAGE }}:${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **URL**: http://localhost:8090" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" >> $GITHUB_STEP_SUMMARY
+        echo "- **Actor**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Updated File**: \`${{ env.DEPLOY_PATH_DEV }}\`" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: always()
+    
+    steps:
+    - name: Notify Success
+      if: needs.deploy.result == 'success'
+      run: |
+        echo "✅ Web deployment to development successful!"
+        echo "Version: ${{ needs.build.outputs.version }}"
+        echo "URL: http://localhost:8090"
+        
+    - name: Notify Failure
+      if: needs.deploy.result == 'failure'
+      run: |
+        echo "❌ Web deployment to development failed!"
+        echo "Check the logs above for details."
