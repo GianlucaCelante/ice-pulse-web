@@ -16,10 +16,6 @@ const SensorDetails: React.FC<SensorDetailsProps> = ({ sensor, onBack }) => {
   const [timeRange, setTimeRange] = useState<'1h' | '6h' | '24h' | '7d'>('24h');
   const [activeTab, setActiveTab] = useState<'overview' | 'readings' | 'settings'>('overview');
 
-  useEffect(() => {
-    loadReadings();
-  }, [sensor.id, timeRange]);
-
   const loadReadings = async () => {
     setLoading(true);
     
@@ -70,6 +66,10 @@ const SensorDetails: React.FC<SensorDetailsProps> = ({ sensor, onBack }) => {
       setLoading(false);
     }
   };
+
+    useEffect(() => {
+    loadReadings();
+    }, [sensor.id, timeRange, loadReadings]);
 
   const getStatusColor = (status: string) => {
     const colors = {

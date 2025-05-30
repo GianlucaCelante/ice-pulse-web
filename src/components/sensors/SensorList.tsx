@@ -16,7 +16,7 @@ const SensorList: React.FC = () => {
   const [sortBy, setSortBy] = useState<'name' | 'status' | 'lastUpdate'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   
-  const { fetchData } = useApi();
+  const {} = useApi();
 
   useEffect(() => {
     loadSensors();
