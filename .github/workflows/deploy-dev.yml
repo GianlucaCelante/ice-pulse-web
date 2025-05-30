@@ -80,7 +80,11 @@ jobs:
         fi
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Final version: $VERSION"
-
+    - name: Debug Docker Login
+      run: |
+        echo "Testing Docker login..."
+        echo ${{ secrets.DOCKER_USERNAME }}
+        docker login --username ${{ secrets.DOCKER_USERNAME }} --password ${{ secrets.DOCKER_PASSWORD }}
   build:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
