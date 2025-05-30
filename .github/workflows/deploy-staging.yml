@@ -17,7 +17,7 @@ on:
 
 env:
   DOCKER_REGISTRY: docker.io
-  DOCKER_IMAGE: gianlucacelante/ice-pulse-web
+  DOCKER_IMAGE: docker.io/aipioppi/ice-pulse-web
   INFRA_REPO_URL: git@github.com:GianlucaCelante/ice-pulse-infra.git
   INFRA_BRANCH: master
   DEPLOY_PATH_STAGING: devops/staging/docker-compose-web-staging.yml
