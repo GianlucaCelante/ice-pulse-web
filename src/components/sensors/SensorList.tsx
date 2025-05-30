@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import SensorCard from './SensorCard';
 import SensorDetails from './SensorDetails';
 import Loading from '../common/Loading';
-import { useApi } from '../../hooks/useApi';
 import { Sensor, SensorStatus } from '../../types';
 import './SensorList.css';
 

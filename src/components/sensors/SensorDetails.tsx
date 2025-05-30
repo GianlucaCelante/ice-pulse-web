@@ -16,7 +16,7 @@ const SensorDetails: React.FC<SensorDetailsProps> = ({ sensor, onBack }) => {
   const [timeRange, setTimeRange] = useState<'1h' | '6h' | '24h' | '7d'>('24h');
   const [activeTab, setActiveTab] = useState<'overview' | 'readings' | 'settings'>('overview');
 
-  // ✅ FIXED: loadReadings in useCallback
+  // ✅ FIX: Wrappa loadReadings in useCallback per evitare re-render infiniti
   const loadReadings = useCallback(async () => {
     setLoading(true);
     
@@ -66,12 +66,12 @@ const SensorDetails: React.FC<SensorDetailsProps> = ({ sensor, onBack }) => {
     } finally {
       setLoading(false);
     }
-  }, [sensor.id, sensor.lastReading?.temperature, sensor.lastReading?.humidity, sensor.lastReading?.pressure, timeRange]);
+  }, [sensor.id, sensor.lastReading?.temperature, sensor.lastReading?.humidity, sensor.lastReading?.pressure, timeRange]); // ✅ FIX: Aggiunte tutte le dipendenze
 
-  // ✅ FIXED: useEffect with correct dependency
+  // ✅ FIX: Ora loadReadings è stabile, quindi useEffect non causerà re-render infiniti
   useEffect(() => {
     loadReadings();
-  }, [loadReadings]);
+  }, [loadReadings]); // ✅ FIX: Solo loadReadings come dipendenza
 
   const getStatusColor = (status: string) => {
     const colors = {
